@@ -1,27 +1,16 @@
 const express = require("express");
-const db = require("./src/config/database");
+const categoryRoutes = require("./src/routes/categoryRoutes");
 const app = express();
 
+// Middleware to read JSON [cite: 13]
 app.use(express.json());
 
+// Apply routes - All category requests are sent to categoryRoutes
+app.use("/api/v1/categories", categoryRoutes);
+
+// The "Hello" route is optional now, but you can keep a simple version for testing
 app.get("/", (req, res) => {
-  res.send("The Inventory API is waking up !");
-});
-
-app.post("/api/v1/categories", (req, res) => {
-  const { name, description } = req.body;
-
-  try {
-    const info = db
-      .prepare("INSERT INTO categories (name, description) VALUES (?, ?)")
-      .run(name, description);
-    res.status(201).json({
-      message: "categories created!",
-      id: info.lastInsertRowid,
-    });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  res.send("Inventory API is running!");
 });
 
 app.listen(3000, () => {
