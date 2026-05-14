@@ -1,14 +1,13 @@
 const express = require("express");
 const categoryRoutes = require("./src/routes/categoryRoutes");
+const productRoutes = require("./src/routes/productRoutes");
 const app = express();
 
-// Middleware to read JSON [cite: 13]
 app.use(express.json());
 
-// Apply routes - All category requests are sent to categoryRoutes
 app.use("/api/v1/categories", categoryRoutes);
+app.use("/api/v1/products", productRoutes);
 
-// The "Hello" route is optional now, but you can keep a simple version for testing
 app.get("/", (req, res) => {
   res.send("Inventory API is running!");
 });
