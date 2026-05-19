@@ -1,13 +1,14 @@
 const express = require("express");
 const categoryRoutes = require("./src/routes/categoryRoutes");
 const productRoutes = require("./src/routes/productRoutes");
+const authRoutes = require("./src/routes/authRoutes");
 const app = express();
 
 app.use(express.json());
 
 app.use("/api/v1/categories", categoryRoutes);
 app.use("/api/v1/products", productRoutes);
-
+app.use("/api/v1/auth", authRoutes);
 app.get("/", (req, res) => {
   res.send("Inventory API is running!");
 });
