@@ -135,11 +135,31 @@ exports.deleteProduct = (req, res) => {
     });
 
     deleteTransaction();
-    res
-      .status(200)
-      .json({
-        message: "Product and associated movement logs deleted safely.",
-      });
+    res.status(200).json({
+      message: "Product and associated movement logs deleted safely.",
+    });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+};
+
+exports.getLowStockAlerts = (req, res) => {
+  try {
+    const lowStockProducts = db
+      .prepare(
+        `
+      SELECT p.*, c.name AS category_name 
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.quantity <= p.low_stock_threshold
+    `,
+      )
+      .all();
+
+    res.status(200).json({
+      count: lowStockProducts.length,
+      alerts: lowStockProducts,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }

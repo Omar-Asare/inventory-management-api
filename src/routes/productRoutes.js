@@ -7,6 +7,8 @@ router.post("/", protect, authorize("admin"), productController.createProduct);
 
 router.get("/", protect, productController.getProducts);
 
+router.get("/low-stock", protect, productController.getLowStockAlerts);
+
 router.get("/:id", protect, productController.getProductById);
 
 router.patch(
