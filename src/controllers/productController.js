@@ -208,3 +208,51 @@ exports.getLowStockAlerts = (req, res, next) => {
     next(error);
   }
 };
+
+exports.exportLowStockCSV = (req, res, next) => {
+  try {
+    const lowStockItems = db
+      .prepare(
+        `
+      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
+      FROM products p
+      LEFT JOIN categories c ON p.category_id = c.id
+      WHERE p.quantity <= p.low_stock_threshold
+    `,
+      )
+      .all();
+
+    const csvHeaders = [
+      "Product ID",
+      "Name",
+      "SKU",
+      "Current Stock",
+      "Threshold Limit",
+      "Category",
+    ];
+
+    const csvRows = lowStockItems.map((item) => [
+      item.id,
+      `"${item.name.replace(/"/g, '""')}"`,
+      item.sku,
+      item.quantity,
+      item.low_stock_threshold,
+      item.category_name || "Uncategorized",
+    ]);
+
+    const csvContent = [
+      csvHeaders.join(","),
+      ...csvRows.map((row) => row.join(",")),
+    ].join("\n");
+
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader(
+      "Content-Disposition",
+      "attachment; filename=low_stock_report.csv",
+    );
+
+    res.status(200).send(csvContent);
+  } catch (error) {
+    next(error);
+  }
+};

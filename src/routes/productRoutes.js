@@ -9,6 +9,8 @@ router.get("/", protect, productController.getProducts);
 
 router.get("/low-stock", protect, productController.getLowStockAlerts);
 
+router.get("/export/low-stock", protect, productController.exportLowStockCSV);
+
 router.get("/:id", protect, productController.getProductById);
 
 router.patch(
