@@ -71,3 +71,44 @@ exports.login = async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 };
+
+exports.getMe = (req, res, next) => {
+  try {
+    const user = db
+      .prepare(
+        "SELECT id, name, email, role, created_at FROM users WHERE id = ?",
+      )
+      .get(req.user.id);
+
+    if (!user) {
+      return next(
+        new AppError("User belonging to this token no longer exists.", 404),
+      );
+    }
+
+    res.status(200).json({
+      status: "success",
+      data: { user },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
+exports.getAllUsers = (req, res, next) => {
+  try {
+    const users = db
+      .prepare(
+        "SELECT id, name, email, role, created_at FROM users ORDER BY id DESC",
+      )
+      .all();
+
+    res.status(200).json({
+      status: "success",
+      count: users.length,
+      data: { users },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
