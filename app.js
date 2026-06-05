@@ -3,6 +3,10 @@ const categoryRoutes = require("./src/routes/categoryRoutes");
 const productRoutes = require("./src/routes/productRoutes");
 const authRoutes = require("./src/routes/authRoutes");
 const stockRoutes = require("./src/routes/stockRoutes");
+
+const AppError = require("./src/utils/appError");
+const globalErrorHandler = require("./src/middleware/errorMiddleware");
+
 const app = express();
 
 app.use(express.json());
@@ -11,9 +15,16 @@ app.use("/api/v1/categories", categoryRoutes);
 app.use("/api/v1/products", productRoutes);
 app.use("/api/v1/auth", authRoutes);
 app.use("/api/v1/stock", stockRoutes);
+
 app.get("/", (req, res) => {
   res.send("Inventory API is running!");
 });
+
+app.use((req, res, next) => {
+  next(new AppError(`Can't find ${req.originalUrl} on this server!`, 404));
+});
+
+app.use(globalErrorHandler);
 
 app.listen(3000, () => {
   console.log("Server is running on http://localhost:3000");

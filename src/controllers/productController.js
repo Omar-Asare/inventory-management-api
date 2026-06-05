@@ -1,62 +1,65 @@
 const db = require("../config/database");
+const AppError = require("../utils/appError"); // 1. Import our custom error utility
 
-exports.createProduct = (req, res) => {
+exports.createProduct = (req, res, next) => {
   const {
-    sku,
     name,
+    sku,
     description,
-    category_id,
     price,
     quantity,
     low_stock_threshold,
+    category_id,
   } = req.body;
 
-  const transaction = db.transaction(() => {
-    const productstmt = db.prepare(`
-      INSERT INTO products (sku, name, description, category_id, price, quantity, low_stock_threshold)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-      `);
+  if (!name || !sku || price === undefined || quantity === undefined) {
+    return next(
+      new AppError("Name, SKU, Price, and Quantity are required fields.", 400),
+    );
+  }
 
-    const result = productstmt.run(
-      sku,
+  const transaction = db.transaction(() => {
+    const productStmt = db.prepare(`
+      INSERT INTO products (name, sku, description, price, quantity, low_stock_threshold, category_id)
+      VALUES (?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const info = productStmt.run(
       name,
+      sku,
       description,
-      category_id,
       price,
       quantity,
-      low_stock_threshold,
+      low_stock_threshold || 10,
+      category_id,
     );
+    const productId = info.lastInsertRowid;
 
-    const productId = result.lastInsertRowid;
-
-    const movementstmt = db.prepare(` 
-        INSERT INTO stock_movements (product_id, type, quantity, reason)
-        VALUES (?, 'in', ?, 'Initial stock on creation')
-        `);
-    movementstmt.run(productId, quantity);
+    const ledgerStmt = db.prepare(`
+      INSERT INTO stock_movements (product_id, change_amount, type, reason, performed_by)
+      VALUES (?, ?, 'in', 'Initial stock allocation on product creation', ?)
+    `);
+    ledgerStmt.run(productId, quantity, req.user.id);
 
     return productId;
   });
 
   try {
-    const id = transaction();
-    res
-      .status(201)
-      .json({ message: "Product created and stock recorded!", id });
+    const newProductId = transaction();
+    res.status(201).json({
+      message: "Product created and initialized in ledger!",
+      id: newProductId,
+    });
   } catch (error) {
-    if (error.message.includes("UNIQUE constraint failed")) {
-      return res.status(409).json({ error: "SKU already exists" });
-    }
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-exports.getProducts = (req, res) => {
+exports.getProducts = (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
-
     const { search, category_id } = req.query;
 
     let queryStr = `
@@ -64,7 +67,6 @@ exports.getProducts = (req, res) => {
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
     `;
-
     let countStr = `SELECT COUNT(*) as total FROM products p`;
 
     const whereConditions = [];
@@ -89,9 +91,7 @@ exports.getProducts = (req, res) => {
     const totalRecords = db.prepare(countStr).get(...queryParams).total;
 
     queryStr += ` ORDER BY p.id DESC LIMIT ? OFFSET ?`;
-
-    const dataParams = [...queryParams, limit, offset];
-    const products = db.prepare(queryStr).all(...dataParams);
+    const products = db.prepare(queryStr).all(...queryParams, limit, offset);
 
     res.status(200).json({
       meta: {
@@ -103,16 +103,16 @@ exports.getProducts = (req, res) => {
       data: products,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-exports.getProductById = (req, res) => {
+exports.getProductById = (req, res, next) => {
   try {
     const product = db
       .prepare(
         `
-      SELECT p.*, c.name AS category_name
+      SELECT p.*, c.name AS category_name 
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE p.id = ?
@@ -121,51 +121,56 @@ exports.getProductById = (req, res) => {
       .get(req.params.id);
 
     if (!product) {
-      return res.status(404).json({ error: "Product not found" });
+      return next(new AppError("Product record not found.", 404));
     }
+
     res.status(200).json(product);
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-exports.updateProduct = (req, res) => {
-  const { name, description, price, low_stock_threshold } = req.body;
+exports.updateProduct = (req, res, next) => {
   const { id } = req.params;
+  const { name, description, price, low_stock_threshold, category_id } =
+    req.body;
 
   try {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
     if (!product) {
-      return res.status(404).json({ error: "Product not found" });
+      return next(new AppError("Product record not found.", 404));
     }
 
     const stmt = db.prepare(`
       UPDATE products 
-      SET name = ?, description = ?, price = ?, low_stock_threshold = ?
+      SET name = ?, description = ?, price = ?, low_stock_threshold = ?, category_id = ? 
       WHERE id = ?
     `);
 
     stmt.run(
       name || product.name,
       description !== undefined ? description : product.description,
-      price || product.price,
-      low_stock_threshold || product.low_stock_threshold,
+      price !== undefined ? price : product.price,
+      low_stock_threshold !== undefined
+        ? low_stock_threshold
+        : product.low_stock_threshold,
+      category_id !== undefined ? category_id : product.category_id,
       id,
     );
 
     res.status(200).json({ message: "Product updated successfully!" });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-exports.deleteProduct = (req, res) => {
+exports.deleteProduct = (req, res, next) => {
   const { id } = req.params;
 
   try {
     const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
     if (!product) {
-      return res.status(404).json({ error: "Product not found" });
+      return next(new AppError("Product record not found.", 404));
     }
 
     const deleteTransaction = db.transaction(() => {
@@ -175,19 +180,19 @@ exports.deleteProduct = (req, res) => {
 
     deleteTransaction();
     res.status(200).json({
-      message: "Product and associated movement logs deleted safely.",
+      message: "Product and its movement history purged successfully.",
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
 
-exports.getLowStockAlerts = (req, res) => {
+exports.getLowStockAlerts = (req, res, next) => {
   try {
-    const lowStockProducts = db
+    const lowStockItems = db
       .prepare(
         `
-      SELECT p.*, c.name AS category_name 
+      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
       WHERE p.quantity <= p.low_stock_threshold
@@ -196,10 +201,10 @@ exports.getLowStockAlerts = (req, res) => {
       .all();
 
     res.status(200).json({
-      count: lowStockProducts.length,
-      alerts: lowStockProducts,
+      count: lowStockItems.length,
+      alerts: lowStockItems,
     });
   } catch (error) {
-    res.status(500).json({ error: error.message });
+    next(error);
   }
 };
