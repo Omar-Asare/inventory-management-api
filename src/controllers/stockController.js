@@ -65,3 +65,66 @@ exports.adjustStock = (req, res, next) => {
     next(error);
   }
 };
+
+exports.getInventorySummary = (req, res, next) => {
+  try {
+    // 1. Calculate overall warehouse metrics
+    const generalMetrics = db
+      .prepare(
+        `
+      SELECT 
+        COUNT(*) as total_unique_products,
+        SUM(quantity) as total_stock_units,
+        SUM(price * quantity) as total_warehouse_value
+      FROM products
+    `,
+      )
+      .get();
+
+    const ledgerTrends = db
+      .prepare(
+        `
+      SELECT 
+        type,
+        COUNT(*) as transaction_count,
+        SUM(quantity) as total_units_moved
+      FROM stock_movements
+      WHERE created_at >= datetime('now', '-30 days')
+      GROUP BY type
+    `,
+      )
+      .all();
+
+    const inflows = ledgerTrends.find((t) => t.type === "in") || {
+      transaction_count: 0,
+      total_units_moved: 0,
+    };
+    const outflows = ledgerTrends.find((t) => t.type === "out") || {
+      transaction_count: 0,
+      total_units_moved: 0,
+    };
+
+    res.status(200).json({
+      status: "success",
+      data: {
+        warehouse: {
+          total_unique_products: generalMetrics.total_unique_products || 0,
+          total_stock_units: generalMetrics.total_stock_units || 0,
+          total_warehouse_value: generalMetrics.total_warehouse_value || 0,
+        },
+        recent_activity_30_days: {
+          inflows: {
+            total_transactions: inflows.transaction_count,
+            units_received: inflows.total_units_moved || 0,
+          },
+          outflows: {
+            total_transactions: outflows.transaction_count,
+            units_deducted: outflows.total_units_moved || 0,
+          },
+        },
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
