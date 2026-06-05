@@ -53,16 +53,55 @@ exports.createProduct = (req, res) => {
 
 exports.getProducts = (req, res) => {
   try {
-    const products = db
-      .prepare(
-        `
-      SELECT p.*, c.name AS category_name
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+
+    const { search, category_id } = req.query;
+
+    let queryStr = `
+      SELECT p.*, c.name AS category_name 
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-    `,
-      )
-      .all();
-    res.status(200).json(products);
+    `;
+
+    let countStr = `SELECT COUNT(*) as total FROM products p`;
+
+    const whereConditions = [];
+    const queryParams = [];
+
+    if (search) {
+      whereConditions.push(`(p.name LIKE ? OR p.sku LIKE ?)`);
+      queryParams.push(`%${search}%`, `%${search}%`);
+    }
+
+    if (category_id) {
+      whereConditions.push(`p.category_id = ?`);
+      queryParams.push(category_id);
+    }
+
+    if (whereConditions.length > 0) {
+      const whereClause = ` WHERE ` + whereConditions.join(" AND ");
+      queryStr += whereClause;
+      countStr += whereClause;
+    }
+
+    const totalRecords = db.prepare(countStr).get(...queryParams).total;
+
+    queryStr += ` ORDER BY p.id DESC LIMIT ? OFFSET ?`;
+
+    const dataParams = [...queryParams, limit, offset];
+    const products = db.prepare(queryStr).all(...dataParams);
+
+    res.status(200).json({
+      meta: {
+        total_items: totalRecords,
+        current_page: page,
+        per_page: limit,
+        total_pages: Math.ceil(totalRecords / limit),
+      },
+      data: products,
+    });
   } catch (error) {
     res.status(500).json({ error: error.message });
   }
