@@ -1,6 +1,7 @@
 const db = require("../config/database");
-const AppError = require("../utils/appError"); // 1. Import our custom error utility
+const AppError = require("../utils/appError");
 
+// POST /api/v1/products
 exports.createProduct = (req, res, next) => {
   const {
     name,
@@ -10,6 +11,7 @@ exports.createProduct = (req, res, next) => {
     quantity,
     low_stock_threshold,
     category_id,
+    unit, // Added per project specification data model
   } = req.body;
 
   if (!name || !sku || price === undefined || quantity === undefined) {
@@ -19,9 +21,17 @@ exports.createProduct = (req, res, next) => {
   }
 
   const transaction = db.transaction(() => {
+    // Check for duplicate SKU to enforce 409 Conflict requirement
+    const duplicateSKU = db
+      .prepare("SELECT id FROM products WHERE sku = ?")
+      .get(sku);
+    if (duplicateSKU) {
+      throw new AppError(`A product with SKU '${sku}' already exists.`, 409);
+    }
+
     const productStmt = db.prepare(`
-      INSERT INTO products (name, sku, description, price, quantity, low_stock_threshold, category_id)
-      VALUES (?, ?, ?, ?, ?, ?, ?)
+      INSERT INTO products (name, sku, description, price, quantity, low_stock_threshold, category_id, unit)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `);
 
     const info = productStmt.run(
@@ -30,16 +40,18 @@ exports.createProduct = (req, res, next) => {
       description,
       price,
       quantity,
-      low_stock_threshold || 10,
+      low_stock_threshold || 5,
       category_id,
+      unit || "pcs",
     );
     const productId = info.lastInsertRowid;
 
+    // Fixed: Aligned with updated schema using user_id auditing columns
     const ledgerStmt = db.prepare(`
-      INSERT INTO stock_movements (product_id, quantity, type, reason)
-      VALUES (?, ?, 'in', 'Initial stock allocation on product creation')
+      INSERT INTO stock_movements (product_id, user_id, quantity, type, reason)
+      VALUES (?, ?, ?, 'in', 'Initial stock allocation on product creation')
     `);
-    ledgerStmt.run(productId, quantity);
+    ledgerStmt.run(productId, req.user.id, quantity);
 
     return productId;
   });
@@ -47,6 +59,7 @@ exports.createProduct = (req, res, next) => {
   try {
     const newProductId = transaction();
     res.status(201).json({
+      status: "success",
       message: "Product created and initialized in ledger!",
       id: newProductId,
     });
@@ -55,12 +68,13 @@ exports.createProduct = (req, res, next) => {
   }
 };
 
+// GET /api/v1/products
 exports.getProducts = (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const offset = (page - 1) * limit;
-    const { search, category_id } = req.query;
+    const { search, category_id, low_stock } = req.query;
 
     let queryStr = `
       SELECT p.*, c.name AS category_name 
@@ -69,7 +83,7 @@ exports.getProducts = (req, res, next) => {
     `;
     let countStr = `SELECT COUNT(*) as total FROM products p`;
 
-    const whereConditions = ["p.is_deleted = 0"];
+    const whereConditions = [];
     const queryParams = [];
 
     if (search) {
@@ -82,9 +96,16 @@ exports.getProducts = (req, res, next) => {
       queryParams.push(category_id);
     }
 
-    const whereClause = ` WHERE ` + whereConditions.join(" AND ");
-    queryStr += whereClause;
-    countStr += whereClause;
+    // Fixed: Supports dynamic evaluation filtering for low stock at query time
+    if (low_stock === "true") {
+      whereConditions.push(`p.quantity <= p.low_stock_threshold`);
+    }
+
+    if (whereConditions.length > 0) {
+      const whereClause = ` WHERE ` + whereConditions.join(" AND ");
+      queryStr += whereClause;
+      countStr += whereClause;
+    }
 
     const totalRecords = db.prepare(countStr).get(...queryParams).total;
 
@@ -105,6 +126,7 @@ exports.getProducts = (req, res, next) => {
   }
 };
 
+// GET /api/v1/products/:id
 exports.getProductById = (req, res, next) => {
   try {
     const product = db
@@ -113,7 +135,7 @@ exports.getProductById = (req, res, next) => {
       SELECT p.*, c.name AS category_name 
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ? AND p.is_deleted = 0
+      WHERE p.id = ?
     `,
       )
       .get(req.params.id);
@@ -128,22 +150,21 @@ exports.getProductById = (req, res, next) => {
   }
 };
 
+// PATCH /api/v1/products/:id
 exports.updateProduct = (req, res, next) => {
   const { id } = req.params;
-  const { name, description, price, low_stock_threshold, category_id } =
+  const { name, description, price, low_stock_threshold, category_id, unit } =
     req.body;
 
   try {
-    const product = db
-      .prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0")
-      .get(id);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
     if (!product) {
       return next(new AppError("Product record not found.", 404));
     }
 
     const stmt = db.prepare(`
       UPDATE products 
-      SET name = ?, description = ?, price = ?, low_stock_threshold = ?, category_id = ? 
+      SET name = ?, description = ?, price = ?, low_stock_threshold = ?, category_id = ?, unit = ?, updated_at = CURRENT_TIMESTAMP
       WHERE id = ?
     `);
 
@@ -155,51 +176,55 @@ exports.updateProduct = (req, res, next) => {
         ? low_stock_threshold
         : product.low_stock_threshold,
       category_id !== undefined ? category_id : product.category_id,
+      unit || product.unit,
       id,
     );
 
-    res.status(200).json({ message: "Product updated successfully!" });
+    res
+      .status(200)
+      .json({ status: "success", message: "Product updated successfully!" });
   } catch (error) {
     next(error);
   }
 };
 
+// DELETE /api/v1/products/:id (Admin Only Guarded at Route Level)
 exports.deleteProduct = (req, res, next) => {
   const { id } = req.params;
 
   try {
-    const product = db
-      .prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0")
-      .get(id);
+    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
     if (!product) {
-      return next(
-        new AppError(
-          "Product record not found or has already been safely archived.",
-          404,
-        ),
-      );
+      return next(new AppError("Product record not found.", 404));
     }
 
-    db.prepare("UPDATE products SET is_deleted = 1 WHERE id = ?").run(id);
+    // Fixed: Complete transaction-backed cascade hard delete per spec
+    const deleteTransaction = db.transaction(() => {
+      db.prepare("DELETE FROM stock_movements WHERE product_id = ?").run(id);
+      db.prepare("DELETE FROM products WHERE id = ?").run(id);
+    });
+
+    deleteTransaction();
 
     res.status(200).json({
       status: "success",
-      message: `Product '${product.name}' has been safely archived and removed from active inventory calculations.`,
+      message: `Product '${product.name}' and its associated movement log history have been permanently deleted.`,
     });
   } catch (error) {
     next(error);
   }
 };
 
+// GET /api/v1/reports/inventory (Can be utilized here or routed within report controllers)
 exports.getLowStockAlerts = (req, res, next) => {
   try {
     const lowStockItems = db
       .prepare(
         `
-      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
+      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, p.unit, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.quantity <= p.low_stock_threshold AND p.is_deleted = 0
+      WHERE p.quantity <= p.low_stock_threshold
     `,
       )
       .all();
@@ -218,10 +243,10 @@ exports.exportLowStockCSV = (req, res, next) => {
     const lowStockItems = db
       .prepare(
         `
-      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
+      SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, p.unit, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.quantity <= p.low_stock_threshold AND p.is_deleted = 0
+      WHERE p.quantity <= p.low_stock_threshold
     `,
       )
       .all();
@@ -232,6 +257,7 @@ exports.exportLowStockCSV = (req, res, next) => {
       "SKU",
       "Current Stock",
       "Threshold Limit",
+      "Unit",
       "Category",
     ];
 
@@ -241,6 +267,7 @@ exports.exportLowStockCSV = (req, res, next) => {
       item.sku,
       item.quantity,
       item.low_stock_threshold,
+      item.unit,
       item.category_name || "Uncategorized",
     ]);
 
