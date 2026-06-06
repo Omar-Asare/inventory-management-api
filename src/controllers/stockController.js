@@ -4,14 +4,32 @@ const { sendLowStockAlert } = require("../services/notificationService");
 
 // POST /api/v1/stock/adjust
 exports.adjustStock = (req, res, next) => {
-  const { product_id, quantity, reason } = req.body;
+  // Added explicit 'type' extraction alongside quantity, product_id, and reason
+  const { product_id, quantity, type, reason } = req.body;
 
-  if (!product_id || quantity === undefined || !reason) {
+  if (!product_id || quantity === undefined || !type || !reason) {
     return next(
       new AppError(
-        "Product ID, quantity, and a clear reason are required fields.",
+        "Product ID, quantity, type ('in'|'out'|'adjustment'), and a clear reason are required fields.",
         400,
       ),
+    );
+  }
+
+  // Enforce valid enum parameters matching database constraints
+  if (!["in", "out", "adjustment"].includes(type)) {
+    return next(
+      new AppError(
+        "Invalid movement type. Must be 'in', 'out', or 'adjustment'.",
+        400,
+      ),
+    );
+  }
+
+  // Enforce that quantity values are not negative numbers
+  if (quantity < 0) {
+    return next(
+      new AppError("Quantity value must be a positive integer.", 400),
     );
   }
 
@@ -19,6 +37,7 @@ exports.adjustStock = (req, res, next) => {
     const product = db
       .prepare("SELECT quantity FROM products WHERE id = ?")
       .get(product_id);
+
     if (!product) {
       throw new AppError(
         "Target product record not found for stock adjustment.",
@@ -26,28 +45,39 @@ exports.adjustStock = (req, res, next) => {
       );
     }
 
-    const calculatedNewQuantity = product.quantity + quantity;
-    const movementType = quantity >= 0 ? "in" : "out";
+    let calculatedNewQuantity;
 
+    // Evaluate business rules based on the explicitly declared movement type
+    if (type === "adjustment") {
+      // Rule: 'adjustment' sets the value directly to the provided value
+      calculatedNewQuantity = quantity;
+    } else if (type === "in") {
+      calculatedNewQuantity = product.quantity + quantity;
+    } else if (type === "out") {
+      calculatedNewQuantity = product.quantity - quantity;
+    }
+
+    // Safety check to avoid illegal negative warehouse entries
     if (calculatedNewQuantity < 0) {
       throw new AppError(
-        `Invalid adjustment. Warehouse only has ${product.quantity} items in stock, cannot deduct ${Math.abs(quantity)}.`,
+        `Invalid operational volume. Warehouse only has ${product.quantity} items in stock, cannot deduct ${quantity}.`,
         400,
       );
     }
 
+    // Update the master tracking record table
     db.prepare("UPDATE products SET quantity = ? WHERE id = ?").run(
       calculatedNewQuantity,
       product_id,
     );
 
-    // Fixed: Cleaned up to match your exact stock_movements columns
+    // Aligned with updated schema: tracking req.user.id
     const ledgerStmt = db.prepare(`
-      INSERT INTO stock_movements (product_id, quantity, type, reason)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO stock_movements (product_id, user_id, quantity, type, reason)
+      VALUES (?, ?, ?, ?, ?)
     `);
 
-    ledgerStmt.run(product_id, Math.abs(quantity), movementType, reason);
+    ledgerStmt.run(product_id, req.user.id, quantity, type, reason);
 
     return calculatedNewQuantity;
   });
@@ -56,10 +86,12 @@ exports.adjustStock = (req, res, next) => {
     const updatedQuantity = transaction();
 
     res.status(200).json({
-      message: "Stock adjusted and logged successfully!",
+      status: "success",
+      message: "Stock movement recorded and logged cleanly in ledger history!",
       new_quantity: updatedQuantity,
     });
 
+    // Check low stock triggers after running the database transaction
     const product = db
       .prepare(
         "SELECT name, sku, quantity, low_stock_threshold FROM products WHERE id = ?",
@@ -94,6 +126,7 @@ exports.getInventorySummary = (req, res, next) => {
       )
       .get();
 
+    // Grouping includes 'adjustment' types now
     const ledgerTrends = db
       .prepare(
         `
@@ -116,6 +149,10 @@ exports.getInventorySummary = (req, res, next) => {
       transaction_count: 0,
       total_units_moved: 0,
     };
+    const adjustments = ledgerTrends.find((t) => t.type === "adjustment") || {
+      transaction_count: 0,
+      total_units_moved: 0,
+    };
 
     res.status(200).json({
       status: "success",
@@ -133,6 +170,10 @@ exports.getInventorySummary = (req, res, next) => {
           outflows: {
             total_transactions: outflows.transaction_count,
             units_deducted: outflows.total_units_moved || 0,
+          },
+          adjustments: {
+            total_transactions: adjustments.transaction_count,
+            units_recalibrated: adjustments.total_units_moved || 0,
           },
         },
       },
