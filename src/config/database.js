@@ -31,10 +31,11 @@ db.exec(`
     price REAL,
     quantity INTEGER DEFAULT 0,
     low_stock_threshold INTEGER DEFAULT 5,
+    is_deleted INTEGER DEFAULT 0,
     FOREIGN KEY (category_id) REFERENCES categories(id)
   );
 
-  -- 4. Stock Movements Table (Added to catch your controller's transaction data)
+  -- 4. Stock Movements Table Ledger
   CREATE TABLE IF NOT EXISTS stock_movements (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     product_id INTEGER NOT NULL,
@@ -45,6 +46,12 @@ db.exec(`
     FOREIGN KEY (product_id) REFERENCES products(id)
   );
 `);
+
+try {
+  db.prepare(
+    "ALTER TABLE products ADD COLUMN is_deleted INTEGER DEFAULT 0;",
+  ).run();
+} catch (e) {}
 
 console.log("Database tables initialized!");
 

@@ -41,7 +41,6 @@ exports.sendLowStockAlert = async (
       `📩 Low-stock email alert dispatched for ${sku}. Message ID: ${info.messageId}`,
     );
   } catch (error) {
-    // We log the error but don't pass it to next(error) because we
     console.error(
       "❌ Background email notification failed to send:",
       error.message,

@@ -36,10 +36,10 @@ exports.createProduct = (req, res, next) => {
     const productId = info.lastInsertRowid;
 
     const ledgerStmt = db.prepare(`
-      INSERT INTO stock_movements (product_id, change_amount, type, reason, performed_by)
-      VALUES (?, ?, 'in', 'Initial stock allocation on product creation', ?)
+      INSERT INTO stock_movements (product_id, quantity, type, reason)
+      VALUES (?, ?, 'in', 'Initial stock allocation on product creation')
     `);
-    ledgerStmt.run(productId, quantity, req.user.id);
+    ledgerStmt.run(productId, quantity);
 
     return productId;
   });
@@ -69,7 +69,7 @@ exports.getProducts = (req, res, next) => {
     `;
     let countStr = `SELECT COUNT(*) as total FROM products p`;
 
-    const whereConditions = [];
+    const whereConditions = ["p.is_deleted = 0"];
     const queryParams = [];
 
     if (search) {
@@ -82,11 +82,9 @@ exports.getProducts = (req, res, next) => {
       queryParams.push(category_id);
     }
 
-    if (whereConditions.length > 0) {
-      const whereClause = ` WHERE ` + whereConditions.join(" AND ");
-      queryStr += whereClause;
-      countStr += whereClause;
-    }
+    const whereClause = ` WHERE ` + whereConditions.join(" AND ");
+    queryStr += whereClause;
+    countStr += whereClause;
 
     const totalRecords = db.prepare(countStr).get(...queryParams).total;
 
@@ -115,7 +113,7 @@ exports.getProductById = (req, res, next) => {
       SELECT p.*, c.name AS category_name 
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.id = ?
+      WHERE p.id = ? AND p.is_deleted = 0
     `,
       )
       .get(req.params.id);
@@ -136,7 +134,9 @@ exports.updateProduct = (req, res, next) => {
     req.body;
 
   try {
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
+    const product = db
+      .prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0")
+      .get(id);
     if (!product) {
       return next(new AppError("Product record not found.", 404));
     }
@@ -168,19 +168,23 @@ exports.deleteProduct = (req, res, next) => {
   const { id } = req.params;
 
   try {
-    const product = db.prepare("SELECT * FROM products WHERE id = ?").get(id);
+    const product = db
+      .prepare("SELECT * FROM products WHERE id = ? AND is_deleted = 0")
+      .get(id);
     if (!product) {
-      return next(new AppError("Product record not found.", 404));
+      return next(
+        new AppError(
+          "Product record not found or has already been safely archived.",
+          404,
+        ),
+      );
     }
 
-    const deleteTransaction = db.transaction(() => {
-      db.prepare("DELETE FROM stock_movements WHERE product_id = ?").run(id);
-      db.prepare("DELETE FROM products WHERE id = ?").run(id);
-    });
+    db.prepare("UPDATE products SET is_deleted = 1 WHERE id = ?").run(id);
 
-    deleteTransaction();
     res.status(200).json({
-      message: "Product and its movement history purged successfully.",
+      status: "success",
+      message: `Product '${product.name}' has been safely archived and removed from active inventory calculations.`,
     });
   } catch (error) {
     next(error);
@@ -195,7 +199,7 @@ exports.getLowStockAlerts = (req, res, next) => {
       SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.quantity <= p.low_stock_threshold
+      WHERE p.quantity <= p.low_stock_threshold AND p.is_deleted = 0
     `,
       )
       .all();
@@ -217,7 +221,7 @@ exports.exportLowStockCSV = (req, res, next) => {
       SELECT p.id, p.name, p.sku, p.quantity, p.low_stock_threshold, c.name AS category_name
       FROM products p
       LEFT JOIN categories c ON p.category_id = c.id
-      WHERE p.quantity <= p.low_stock_threshold
+      WHERE p.quantity <= p.low_stock_threshold AND p.is_deleted = 0
     `,
       )
       .all();
