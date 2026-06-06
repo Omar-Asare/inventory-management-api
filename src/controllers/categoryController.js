@@ -1,12 +1,10 @@
 const db = require("../config/database");
 const AppError = require("../utils/appError");
 
-// 1. CREATE CATEGORY (Refactored with AppError and next)
 exports.createCategory = (req, res, next) => {
   const { name, description } = req.body;
 
   if (!name) {
-    // Replaces res.status(400) with an operational input error
     return next(new AppError("Category name is required.", 400));
   }
 
@@ -14,25 +12,35 @@ exports.createCategory = (req, res, next) => {
     const info = db
       .prepare("INSERT INTO categories (name, description) VALUES (?, ?)")
       .run(name, description);
-    res
-      .status(201)
-      .json({ message: "categories created!", id: info.lastInsertRowid });
-  } catch (error) {
-    next(error); // Forwards any SQL syntax or constraints violations automatically
-  }
-};
 
-// 2. GET ALL CATEGORIES
-exports.getCategories = (req, res, next) => {
-  try {
-    const categories = db.prepare("SELECT * FROM categories").all();
-    res.status(200).json(categories);
+    res.status(201).json({
+      status: "success",
+      message: "Category created successfully!",
+      data: {
+        id: info.lastInsertRowid,
+      },
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 3. GET CATEGORY BY ID (Your beautiful working code!)
+exports.getCategories = (req, res, next) => {
+  try {
+    const categories = db.prepare("SELECT * FROM categories").all();
+
+    res.status(200).json({
+      status: "success",
+      results: categories.length,
+      data: {
+        categories,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+};
+
 exports.getCategoryById = (req, res, next) => {
   try {
     const category = db
@@ -43,13 +51,17 @@ exports.getCategoryById = (req, res, next) => {
       return next(new AppError("Category record not found.", 404));
     }
 
-    res.status(200).json(category);
+    res.status(200).json({
+      status: "success",
+      data: {
+        category,
+      },
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 4. UPDATE CATEGORY
 exports.updateCategory = (req, res, next) => {
   const { name, description } = req.body;
   const { id } = req.params;
@@ -58,6 +70,7 @@ exports.updateCategory = (req, res, next) => {
     const category = db
       .prepare("SELECT * FROM categories WHERE id = ?")
       .get(id);
+
     if (!category) {
       return next(new AppError("Category record not found.", 404));
     }
@@ -74,13 +87,15 @@ exports.updateCategory = (req, res, next) => {
       id,
     );
 
-    res.status(200).json({ message: "Category updated successfully!" });
+    res.status(200).json({
+      status: "success",
+      message: "Category updated successfully!",
+    });
   } catch (error) {
     next(error);
   }
 };
 
-// 5. DELETE CATEGORY
 exports.deleteCategory = (req, res, next) => {
   const { id } = req.params;
 
@@ -88,6 +103,7 @@ exports.deleteCategory = (req, res, next) => {
     const category = db
       .prepare("SELECT * FROM categories WHERE id = ?")
       .get(id);
+
     if (!category) {
       return next(new AppError("Category record not found.", 404));
     }
@@ -95,6 +111,7 @@ exports.deleteCategory = (req, res, next) => {
     const linkedProducts = db
       .prepare("SELECT COUNT(*) as count FROM products WHERE category_id = ?")
       .get(id);
+
     if (linkedProducts.count > 0) {
       return next(
         new AppError(
@@ -105,7 +122,11 @@ exports.deleteCategory = (req, res, next) => {
     }
 
     db.prepare("DELETE FROM categories WHERE id = ?").run(id);
-    res.status(200).json({ message: "Category deleted cleanly." });
+
+    res.status(200).json({
+      status: "success",
+      message: "Category deleted cleanly from database records.",
+    });
   } catch (error) {
     next(error);
   }

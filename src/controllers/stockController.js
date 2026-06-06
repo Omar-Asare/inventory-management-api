@@ -2,9 +2,7 @@ const db = require("../config/database");
 const AppError = require("../utils/appError");
 const { sendLowStockAlert } = require("../services/notificationService");
 
-// POST /api/v1/stock/adjust
 exports.adjustStock = (req, res, next) => {
-  // Added explicit 'type' extraction alongside quantity, product_id, and reason
   const { product_id, quantity, type, reason } = req.body;
 
   if (!product_id || quantity === undefined || !type || !reason) {
@@ -16,7 +14,6 @@ exports.adjustStock = (req, res, next) => {
     );
   }
 
-  // Enforce valid enum parameters matching database constraints
   if (!["in", "out", "adjustment"].includes(type)) {
     return next(
       new AppError(
@@ -26,7 +23,6 @@ exports.adjustStock = (req, res, next) => {
     );
   }
 
-  // Enforce that quantity values are not negative numbers
   if (quantity < 0) {
     return next(
       new AppError("Quantity value must be a positive integer.", 400),
@@ -47,9 +43,7 @@ exports.adjustStock = (req, res, next) => {
 
     let calculatedNewQuantity;
 
-    // Evaluate business rules based on the explicitly declared movement type
     if (type === "adjustment") {
-      // Rule: 'adjustment' sets the value directly to the provided value
       calculatedNewQuantity = quantity;
     } else if (type === "in") {
       calculatedNewQuantity = product.quantity + quantity;
@@ -57,7 +51,6 @@ exports.adjustStock = (req, res, next) => {
       calculatedNewQuantity = product.quantity - quantity;
     }
 
-    // Safety check to avoid illegal negative warehouse entries
     if (calculatedNewQuantity < 0) {
       throw new AppError(
         `Invalid operational volume. Warehouse only has ${product.quantity} items in stock, cannot deduct ${quantity}.`,
@@ -65,13 +58,11 @@ exports.adjustStock = (req, res, next) => {
       );
     }
 
-    // Update the master tracking record table
     db.prepare("UPDATE products SET quantity = ? WHERE id = ?").run(
       calculatedNewQuantity,
       product_id,
     );
 
-    // Aligned with updated schema: tracking req.user.id
     const ledgerStmt = db.prepare(`
       INSERT INTO stock_movements (product_id, user_id, quantity, type, reason)
       VALUES (?, ?, ?, ?, ?)
@@ -91,7 +82,6 @@ exports.adjustStock = (req, res, next) => {
       new_quantity: updatedQuantity,
     });
 
-    // Check low stock triggers after running the database transaction
     const product = db
       .prepare(
         "SELECT name, sku, quantity, low_stock_threshold FROM products WHERE id = ?",
@@ -111,7 +101,6 @@ exports.adjustStock = (req, res, next) => {
   }
 };
 
-// GET /api/v1/stock/analytics/summary
 exports.getInventorySummary = (req, res, next) => {
   try {
     const generalMetrics = db
@@ -126,7 +115,6 @@ exports.getInventorySummary = (req, res, next) => {
       )
       .get();
 
-    // Grouping includes 'adjustment' types now
     const ledgerTrends = db
       .prepare(
         `

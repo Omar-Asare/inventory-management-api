@@ -41,7 +41,7 @@ const authLimiter = rateLimit({
 app.use("/api/v1/auth/login", authLimiter);
 app.use("/api/v1/auth/register", authLimiter);
 
-app.use(express.json({ limit: "10kb" })); // Body limits add a layer against payload attacks
+app.use(express.json({ limit: "10kb" }));
 
 app.use("/api/v1/categories", categoryRoutes);
 app.use("/api/v1/products", productRoutes);

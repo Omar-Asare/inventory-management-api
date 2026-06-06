@@ -1,7 +1,6 @@
 const db = require("../config/database");
 const AppError = require("../utils/appError");
 
-// POST /api/v1/products
 exports.createProduct = (req, res, next) => {
   const {
     name,
@@ -11,7 +10,7 @@ exports.createProduct = (req, res, next) => {
     quantity,
     low_stock_threshold,
     category_id,
-    unit, // Added per project specification data model
+    unit,
   } = req.body;
 
   if (!name || !sku || price === undefined || quantity === undefined) {
@@ -21,7 +20,6 @@ exports.createProduct = (req, res, next) => {
   }
 
   const transaction = db.transaction(() => {
-    // Check for duplicate SKU to enforce 409 Conflict requirement
     const duplicateSKU = db
       .prepare("SELECT id FROM products WHERE sku = ?")
       .get(sku);
@@ -46,7 +44,6 @@ exports.createProduct = (req, res, next) => {
     );
     const productId = info.lastInsertRowid;
 
-    // Fixed: Aligned with updated schema using user_id auditing columns
     const ledgerStmt = db.prepare(`
       INSERT INTO stock_movements (product_id, user_id, quantity, type, reason)
       VALUES (?, ?, ?, 'in', 'Initial stock allocation on product creation')
@@ -68,7 +65,6 @@ exports.createProduct = (req, res, next) => {
   }
 };
 
-// GET /api/v1/products
 exports.getProducts = (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -96,7 +92,6 @@ exports.getProducts = (req, res, next) => {
       queryParams.push(category_id);
     }
 
-    // Fixed: Supports dynamic evaluation filtering for low stock at query time
     if (low_stock === "true") {
       whereConditions.push(`p.quantity <= p.low_stock_threshold`);
     }
@@ -126,7 +121,6 @@ exports.getProducts = (req, res, next) => {
   }
 };
 
-// GET /api/v1/products/:id
 exports.getProductById = (req, res, next) => {
   try {
     const product = db
@@ -150,7 +144,6 @@ exports.getProductById = (req, res, next) => {
   }
 };
 
-// PATCH /api/v1/products/:id
 exports.updateProduct = (req, res, next) => {
   const { id } = req.params;
   const { name, description, price, low_stock_threshold, category_id, unit } =
@@ -188,7 +181,6 @@ exports.updateProduct = (req, res, next) => {
   }
 };
 
-// DELETE /api/v1/products/:id (Admin Only Guarded at Route Level)
 exports.deleteProduct = (req, res, next) => {
   const { id } = req.params;
 
@@ -215,7 +207,6 @@ exports.deleteProduct = (req, res, next) => {
   }
 };
 
-// GET /api/v1/reports/inventory (Can be utilized here or routed within report controllers)
 exports.getLowStockAlerts = (req, res, next) => {
   try {
     const lowStockItems = db
